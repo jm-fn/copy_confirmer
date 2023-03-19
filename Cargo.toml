@@ -10,13 +10,22 @@ categories = ["command-line-utilities", "filesystem"]
 readme = "README.md"
 repository = "https://github.com/jm-fn/duplicate-destroyer"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 walkdir = "2"
 blake2 = "0"
 threadpool = "1"
 indicatif = "0.17"
-clap = { version = "4.1.8", features = ["derive"] }
-colored = "2.0.0"
-log = "0.4.17"
+clap = { version = "4.1.8", features = ["derive"], optional = true }
+colored = { version = "2.0.0", optional = true }
+
+[features]
+cli = ["clap", "colored"]
+
+[[bin]]
+name = "copcon"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "copy_confirmer"
+path = "src/lib.rs"
