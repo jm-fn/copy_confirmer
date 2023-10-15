@@ -22,8 +22,8 @@
 //!
 //! # fn main() -> Result<(), ConfirmerError> {
 //! let cc = CopyConfirmer::new(1);
-//! let missing_files = cc.compare("tests/fixtures/dir_A".into(),
-//!                                vec!["tests/fixtures/dir_B".into()])?;
+//! let missing_files = cc.compare("tests/fixtures/dir_A",
+//!                                &["tests/fixtures/dir_B"])?;
 //!
 //! let expected_missing = vec!["tests/fixtures/dir_A/bar.txt".into()];
 //! assert_eq!(missing_files, ConfirmerResult::MissingFiles(expected_missing));
@@ -45,6 +45,7 @@ use threadpool::ThreadPool;
 use walkdir::WalkDir;
 
 use checksum::*;
+use log;
 
 /// Indicates whether there are files missing in destination dirs
 #[derive(Debug, PartialEq)]
@@ -97,9 +98,11 @@ impl CopyConfirmer {
     /// # Arguments
     /// * `source` - path to the source directory
     /// * `destinations` - vector of paths of destination directories
-    pub fn compare(&self, source: OsString, destinations: Vec<OsString>) -> Result<ConfirmerResult, ConfirmerError> {
+    pub fn compare<T: AsRef<OsStr>>(&self, source: T, destinations: &[T]) -> Result<ConfirmerResult, ConfirmerError> {
         // Total numbers of files for progress bars
-        let total_files_source = get_total_files(&source);
+        let source: &OsStr = source.as_ref();
+        let destinations: Vec<&OsStr> = destinations.iter().map(|x| x.as_ref()).collect();
+        let total_files_source = get_total_files(source);
         let total_dest_files: u64 = destinations.iter().map(|x| get_total_files(x)).sum();
 
         // Keys = hashes of files in source dir, values = vectors of paths to files with the hash
@@ -182,8 +185,8 @@ impl CopyConfirmer {
     ///
     /// # Arguments
     /// * `dir` - directory to go through and get all hashes
-    fn _enqueue_all_hashes(&self, dir: OsString) -> IoResult<()> {
-        for item in WalkDir::new(dir) {
+    fn _enqueue_all_hashes(&self, dir: &OsStr) -> IoResult<()> {
+        for item in WalkDir::new(&dir) {
             let item = item?;
             if item.file_type().is_dir() {
                 continue;
@@ -215,7 +218,8 @@ impl CopyConfirmer {
         while num_not_done > 0 {
             num_not_done = self.threadpool.active_count() + self.threadpool.queued_count();
             pbar.set_position(total_files - num_not_done as u64);
-            thread::sleep(HUNDRED_MILIS);
+            log::info!("Tracking progress.");
+            thread::sleep(2*HUNDRED_MILIS);
         }
         pbar.finish();
     }

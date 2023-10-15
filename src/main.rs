@@ -22,13 +22,15 @@ struct Args {
 }
 
 fn main() -> Result<(), ConfirmerError> {
+    env_logger::init();
+
     let args = Args::parse();
 
     let num_threads = max(1, args.jobs);
 
     let cc = CopyConfirmer::new(num_threads);
 
-    match cc.compare(args.source, args.destination)? {
+    match cc.compare(args.source, &args.destination)? {
         ConfirmerResult::Ok => {
             println!("All files present in destinations");
         }
