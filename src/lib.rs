@@ -39,7 +39,6 @@ use std::ffi::{OsStr, OsString};
 use std::io::Result as IoResult;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::{thread, time};
-use std::fmt::Display;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use threadpool::ThreadPool;
@@ -101,7 +100,7 @@ impl CopyConfirmer {
         // Keys = hashes of files in source dir, values = vectors of paths to files with the hash
         let mut missing_files: HashMap<String, Vec<OsString>> = HashMap::new();
 
-        self._enqueue_all_hashes(&source)?;
+        self._enqueue_all_hashes(source)?;
 
         self._track_progress(total_files_source, "Checking files from source");
 
@@ -160,7 +159,7 @@ impl CopyConfirmer {
         }
 
         // Return all files left in `missing_files` or `Ok`
-        if missing_files.len() == 0 {
+        if missing_files.is_empty() {
             Ok(ConfirmerResult::Ok)
         } else {
             Ok(ConfirmerResult::MissingFiles(missing_files.into_values().flatten().collect()))
@@ -175,7 +174,7 @@ impl CopyConfirmer {
     /// # Arguments
     /// * `dir` - directory to go through and get all hashes
     fn _enqueue_all_hashes(&self, dir: &OsStr) -> IoResult<()> {
-        for item in WalkDir::new(&dir) {
+        for item in WalkDir::new(dir) {
             let item = item?;
             if item.file_type().is_dir() {
                 continue;
