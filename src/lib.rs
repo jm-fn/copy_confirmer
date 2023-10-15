@@ -32,6 +32,7 @@
 //! ```
 
 mod checksum;
+mod copcon_error;
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -45,6 +46,7 @@ use threadpool::ThreadPool;
 use walkdir::WalkDir;
 
 use checksum::*;
+pub use copcon_error::ConfirmerError;
 use log;
 
 /// Indicates whether there are files missing in destination dirs
@@ -56,15 +58,6 @@ pub enum ConfirmerResult {
     MissingFiles(Vec<OsString>),
 }
 
-/// An error produced when comparing directories
-#[derive(Debug)]
-pub struct ConfirmerError(String);
-
-impl Display for ConfirmerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 /// type for mpsc channel in CopyConfirmer
 type HashResult = IoResult<(String, OsString)>;
@@ -108,9 +101,7 @@ impl CopyConfirmer {
         // Keys = hashes of files in source dir, values = vectors of paths to files with the hash
         let mut missing_files: HashMap<String, Vec<OsString>> = HashMap::new();
 
-        if let Err(e) = self._enqueue_all_hashes(source) {
-            return Err(ConfirmerError(e.to_string()));
-        }
+        self._enqueue_all_hashes(&source)?;
 
         self._track_progress(total_files_source, "Checking files from source");
 
@@ -133,16 +124,14 @@ impl CopyConfirmer {
                 }
                 Err(e) => {
                     eprintln!("Error getting hash: {e}");
-                    return Err(ConfirmerError(e.to_string()));
+                    return Err(e.into());
                 }
             }
         }
 
         // Get hashes for all files in destinations
         for dest in destinations {
-            if let Err(e) = self._enqueue_all_hashes(dest) {
-                return Err(ConfirmerError(e.to_string()));
-            }
+            self._enqueue_all_hashes(dest)?;
         }
 
         // FIXME: Would be better to use the results continually instead of waiting for all hashes
@@ -165,7 +154,7 @@ impl CopyConfirmer {
                 }
                 Err(e) => {
                     eprintln!("Error getting hash: {e}");
-                    return Err(ConfirmerError(e.to_string()));
+                    return Err(e.into());
                 }
             }
         }
