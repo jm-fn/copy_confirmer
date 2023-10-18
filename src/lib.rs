@@ -47,16 +47,45 @@ use walkdir::WalkDir;
 use checksum::*;
 pub use copcon_error::ConfirmerError;
 use log;
+use serde::{ser::SerializeSeq, Serialize, Serializer};
 
 /// Indicates whether there are files missing in destination dirs
 #[derive(Debug, PartialEq)]
 pub enum ConfirmerResult {
     /// Indicates all files in source are in at least one destination dir
-    Ok,
+    ///
+    /// Contains HashMap with checksum and structure that contains files coresponding to that
+    /// checksum in source and destination directories
+    Ok(HashMap<String, FileFound>),
     /// Contains files in source that are missing from all destinations
     MissingFiles(Vec<OsString>),
 }
 
+#[derive(Debug, PartialEq, Serialize)]
+pub struct FileFound {
+    /// Paths of same files in source
+    #[serde(serialize_with = "osstring_serialize")]
+    src_paths: Vec<OsString>,
+    /// Paths of same files in destinations
+    #[serde(serialize_with = "osstring_serialize")]
+    dest_paths: Vec<OsString>,
+}
+
+/// Helper function for serialisation of paths
+fn osstring_serialize<S>(hs: &Vec<OsString>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = s.serialize_seq(Some(hs.len()))?;
+    for item in hs.iter() {
+        let stringy: String = item
+            .to_owned()
+            .into_string()
+            .unwrap_or_else(|osstr| format!("Error decoding this: {:?}", osstr));
+        seq.serialize_element(&stringy)?;
+    }
+    seq.end()
+}
 
 /// type for mpsc channel in CopyConfirmer
 type HashResult = IoResult<(String, OsString)>;
@@ -90,7 +119,11 @@ impl CopyConfirmer {
     /// # Arguments
     /// * `source` - path to the source directory
     /// * `destinations` - vector of paths of destination directories
-    pub fn compare<T: AsRef<OsStr>>(&self, source: T, destinations: &[T]) -> Result<ConfirmerResult, ConfirmerError> {
+    pub fn compare<T: AsRef<OsStr>>(
+        &self,
+        source: T,
+        destinations: &[T],
+    ) -> Result<ConfirmerResult, ConfirmerError> {
         // Total numbers of files for progress bars
         let source: &OsStr = source.as_ref();
         let destinations: Vec<&OsStr> = destinations.iter().map(|x| x.as_ref()).collect();
@@ -99,6 +132,8 @@ impl CopyConfirmer {
 
         // Keys = hashes of files in source dir, values = vectors of paths to files with the hash
         let mut missing_files: HashMap<String, Vec<OsString>> = HashMap::new();
+        // hash map for Ok result
+        let mut found_files: HashMap<String, FileFound> = HashMap::new();
 
         self._enqueue_all_hashes(source)?;
 
@@ -148,8 +183,15 @@ impl CopyConfirmer {
         // Remove all files found in destinations from `missing_files`
         for result in self.hashes_rx.try_iter() {
             match result {
-                Ok((hash, _path)) => {
-                    missing_files.remove(&hash);
+                Ok((hash, dest_path)) => {
+                    if let Some(src_paths) = missing_files.remove(&hash) {
+                        found_files
+                            .entry(hash)
+                            .and_modify(|FileFound { dest_paths, .. }| {
+                                dest_paths.push(dest_path.clone())
+                            })
+                            .or_insert(FileFound { src_paths, dest_paths: vec![dest_path] });
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error getting hash: {e}");
@@ -160,7 +202,7 @@ impl CopyConfirmer {
 
         // Return all files left in `missing_files` or `Ok`
         if missing_files.is_empty() {
-            Ok(ConfirmerResult::Ok)
+            Ok(ConfirmerResult::Ok(found_files))
         } else {
             Ok(ConfirmerResult::MissingFiles(missing_files.into_values().flatten().collect()))
         }

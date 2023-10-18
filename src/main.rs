@@ -1,14 +1,17 @@
 use copy_confirmer::*;
-use std::ffi::OsString;
 use std::cmp::max;
+use std::ffi::OsString;
+use std::fs::File;
+use std::io::prelude::*;
 
 use clap::Parser;
 use colored::Colorize;
+use serde::Serialize;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Name of the person to greet
+    /// Source directory
     #[arg(long, short, required(true))]
     source: OsString,
 
@@ -19,6 +22,14 @@ struct Args {
     /// Number of threads for checksum calculation
     #[arg(long, short, default_value_t = 1)]
     jobs: usize,
+
+    /// Print json output to this file
+    #[arg(long, short)]
+    out_file: Option<OsString>,
+
+    /// Print json with all files found if copy is confirmed
+    #[arg(long, short = 'f')]
+    print_found: bool,
 }
 
 fn main() -> Result<(), ConfirmerError> {
@@ -31,8 +42,18 @@ fn main() -> Result<(), ConfirmerError> {
     let cc = CopyConfirmer::new(num_threads);
 
     match cc.compare(args.source, &args.destination)? {
-        ConfirmerResult::Ok => {
-            println!("All files present in destinations");
+        ConfirmerResult::Ok(filelist) => {
+            println!("All files present in destinations.");
+            if args.print_found {
+                let files_found = serde_json::to_string_pretty(&filelist).unwrap();
+
+                if let Some(out_file) = args.out_file {
+                    let mut file = File::create(out_file)?;
+                    file.write_all(&files_found.into_bytes())?;
+                } else {
+                    println!("{files_found}");
+                }
+            }
         }
         ConfirmerResult::MissingFiles(files) => {
             println!("{}", "Missing files:".red().bold());
