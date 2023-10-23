@@ -54,21 +54,22 @@ use serde::{ser::SerializeSeq, Serialize, Serializer};
 pub enum ConfirmerResult {
     /// Indicates all files in source are in at least one destination dir
     ///
-    /// Contains HashMap with checksum and structure that contains files coresponding to that
-    /// checksum in source and destination directories
+    /// Contains HashMap with key ~ checksum of a file and value ~ [FileFound](FileFound) struct
+    /// that contains files corresponding to that checksum in source and destination directories.
     Ok(HashMap<String, FileFound>),
     /// Contains files in source that are missing from all destinations
     MissingFiles(Vec<OsString>),
 }
 
+/// Holds information on all paths in source and destinations that contain the same file
 #[derive(Debug, PartialEq, Serialize)]
 pub struct FileFound {
     /// Paths of same files in source
     #[serde(serialize_with = "osstring_serialize")]
-    src_paths: Vec<OsString>,
+    pub src_paths: Vec<OsString>,
     /// Paths of same files in destinations
     #[serde(serialize_with = "osstring_serialize")]
-    dest_paths: Vec<OsString>,
+    pub dest_paths: Vec<OsString>,
 }
 
 /// Helper function for serialisation of paths
