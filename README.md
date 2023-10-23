@@ -26,15 +26,20 @@ If all files in the source directory are present in one of the destination direc
 ```
 All files present in destinations
 ```
+We can also print a json containing all files in source and their paths in destinations using flags ```--print-found --out-file some_file.json```.
+
 
 ### CLI options
 ```
 Usage: copcon [OPTIONS] --source <SOURCE> --destination <DESTINATION>
 
 Options:
-  -s, --source <SOURCE>            Name of the person to greet
+  -s, --source <SOURCE>            Source directory
   -d, --destination <DESTINATION>  Destination directories
   -j, --jobs <JOBS>                Number of threads for checksum calculation [default: 1]
+  -o, --out-file <OUT_FILE>        Print json output to this file
+  -f, --print-found                Print json with all files found if copy is confirmed
   -h, --help                       Print help
   -V, --version                    Print version
+
 ```
