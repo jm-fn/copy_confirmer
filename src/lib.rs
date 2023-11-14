@@ -219,7 +219,7 @@ impl CopyConfirmer {
     fn _enqueue_all_hashes(&self, dir: &OsStr) -> IoResult<()> {
         for item in WalkDir::new(dir) {
             let item = item?;
-            if item.file_type().is_dir() {
+            if !item.file_type().is_file() {
                 continue;
             }
             let path = item.into_path().into_os_string();
@@ -260,8 +260,12 @@ impl CopyConfirmer {
 
 /// Get number of files in directory
 fn get_total_files(dir: &OsStr) -> u64 {
-    WalkDir::new(dir).into_iter().filter_map(|x| x.ok()).filter(|x| !x.file_type().is_dir()).count()
-        as u64
+    WalkDir::new(dir)
+        .follow_root_links(false)
+        .into_iter()
+        .filter_map(|x| x.ok())
+        .filter(|x| x.file_type().is_file())
+        .count() as u64
 }
 
 /// Get tuple of hash and path
