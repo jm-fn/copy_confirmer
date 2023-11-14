@@ -89,7 +89,7 @@ where
 }
 
 /// type for mpsc channel in CopyConfirmer
-type HashResult = IoResult<(String, OsString)>;
+type HashResult = (OsString, IoResult<String>);
 
 /// Time period for checking the threadpool status
 const HUNDRED_MILIS: time::Duration = time::Duration::from_millis(100);
@@ -149,7 +149,7 @@ impl CopyConfirmer {
         // Add hashes for all files found in source dir to `missing files`
         for result in self.hashes_rx.try_iter() {
             match result {
-                Ok((hash, path)) => {
+                (path, Ok(hash)) => {
                     // FIXME: do this without cloning
                     // Append if there is already an entry with the same hash
                     missing_files
@@ -157,8 +157,8 @@ impl CopyConfirmer {
                         .and_modify(|vec| vec.push(path.clone()))
                         .or_insert(vec![path]);
                 }
-                Err(e) => {
-                    eprintln!("Error getting hash: {e}");
+                (path, Err(e)) => {
+                    eprintln!("Error getting hash {:?}: {}", path, e);
                     return Err(e.into());
                 }
             }
@@ -184,7 +184,7 @@ impl CopyConfirmer {
         // Remove all files found in destinations from `missing_files`
         for result in self.hashes_rx.try_iter() {
             match result {
-                Ok((hash, dest_path)) => {
+                (dest_path, Ok(hash)) => {
                     if let Some(src_paths) = missing_files.remove(&hash) {
                         found_files
                             .entry(hash)
@@ -194,8 +194,8 @@ impl CopyConfirmer {
                             .or_insert(FileFound { src_paths, dest_paths: vec![dest_path] });
                     }
                 }
-                Err(e) => {
-                    eprintln!("Error getting hash: {e}");
+                (dest_path, Err(e)) => {
+                    eprintln!("Error getting hash {:?}: {}", dest_path, e);
                     return Err(e.into());
                 }
             }
@@ -225,7 +225,9 @@ impl CopyConfirmer {
             let path = item.into_path().into_os_string();
             let sender = self.hashes_tx.clone();
             self.threadpool.execute(move || {
-                sender.send(get_hash(path)).expect("Could not send source file hash")
+                sender
+                    .send((path.clone(), get_hash(path)))
+                    .expect("Could not send source file hash")
             });
         }
         Ok(())
@@ -263,7 +265,7 @@ fn get_total_files(dir: &OsStr) -> u64 {
 }
 
 /// Get tuple of hash and path
-fn get_hash(path: OsString) -> IoResult<(String, OsString)> {
+fn get_hash(path: OsString) -> IoResult<String> {
     let checksum = get_blake2_checksum(&path)?;
-    Ok((checksum, path))
+    Ok(checksum)
 }
