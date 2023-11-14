@@ -8,7 +8,7 @@ license = "AGPL-3.0-or-later"
 keywords = ["copy", "directory","duplicate", "cli"]
 categories = ["command-line-utilities", "filesystem"]
 readme = "README.md"
-repository = "https://github.com/jm-fn/duplicate-destroyer"
+repository = "https://github.com/jm-fn/copy_confirmer"
 
 [dependencies]
 walkdir = "2"
