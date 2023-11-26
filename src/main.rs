@@ -30,6 +30,11 @@ struct Args {
     /// Print json with all files found if copy is confirmed
     #[arg(long, short = 'f')]
     print_found: bool,
+
+    /// Disable progress bar
+    #[arg(long, default_value_t = false)]
+    no_progress_bar: bool,
+
 }
 
 fn main() -> Result<(), ConfirmerError> {
@@ -39,7 +44,10 @@ fn main() -> Result<(), ConfirmerError> {
 
     let num_threads = max(1, args.jobs);
 
-    let cc = CopyConfirmer::new(num_threads);
+    let cc = match args.no_progress_bar {
+        true => CopyConfirmer::new(num_threads),
+        false => CopyConfirmer::new(num_threads).with_progress_bar()
+    };
 
     match cc.compare(args.source, &args.destination)? {
         ConfirmerResult::Ok(filelist) => {

@@ -99,6 +99,7 @@ pub struct CopyConfirmer {
     hashes_tx: Sender<HashResult>,
     hashes_rx: Receiver<HashResult>,
     threadpool: ThreadPool,
+    show_progress: bool,
 }
 
 impl CopyConfirmer {
@@ -109,7 +110,17 @@ impl CopyConfirmer {
     pub fn new(num_threads: usize) -> Self {
         let (hashes_tx, hashes_rx) = channel();
         let threadpool = ThreadPool::new(num_threads);
-        Self { hashes_tx, hashes_rx, threadpool }
+        Self { hashes_tx, hashes_rx, threadpool, show_progress: false }
+    }
+
+    /// Enable progress bar
+    pub fn with_progress_bar(self) -> Self {
+        Self {
+            hashes_tx: self.hashes_tx,
+            hashes_rx: self.hashes_rx,
+            threadpool: self.threadpool,
+            show_progress: true,
+        }
     }
 
     /// Check if all files in source are also in one of destinations
@@ -239,22 +250,28 @@ impl CopyConfirmer {
     /// * `total_files` - number of files enqueued in the threadpool for calculation of hash
     /// * `msg` - message to print with progress bar
     fn _track_progress(&self, total_files: u64, msg: &'static str) {
-        let pb_style = ProgressStyle::with_template(
-            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
-        )
-        .unwrap()
-        .progress_chars("##-");
-        let pbar = ProgressBar::new(total_files).with_style(pb_style);
-        pbar.set_message(msg);
+        let mut pbar: Option<ProgressBar> = None;
+        if self.show_progress {
+            let pb_style = ProgressStyle::with_template(
+                "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+            )
+            .unwrap()
+            .progress_chars("##-");
+            pbar = Some(ProgressBar::new(total_files).with_style(pb_style));
+            pbar.as_ref().unwrap().set_message(msg);
+        }
 
         let mut num_not_done = self.threadpool.active_count() + self.threadpool.queued_count();
         while num_not_done > 0 {
             num_not_done = self.threadpool.active_count() + self.threadpool.queued_count();
-            pbar.set_position(total_files - num_not_done as u64);
-            log::info!("Tracking progress.");
-            thread::sleep(2*HUNDRED_MILIS);
+            if self.show_progress {
+                pbar.as_ref().unwrap().set_position(total_files - num_not_done as u64);
+            }
+            thread::sleep(2 * HUNDRED_MILIS);
         }
-        pbar.finish();
+        if self.show_progress {
+            pbar.as_ref().unwrap().finish();
+        }
     }
 }
 
