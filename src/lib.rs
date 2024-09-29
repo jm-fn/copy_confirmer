@@ -30,10 +30,15 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! We can show a progress bar by setting [with_progress_bar](CopyConfirmer::with_progress_bar). We
+//! can exclude files from comparison with
+//! [add_excluded_pattern](CopyConfirmer::add_excluded_pattern).
 
 mod checksum;
 mod copcon_error;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Result as IoResult;
@@ -72,6 +77,24 @@ pub struct FileFound {
     pub dest_paths: Vec<OsString>,
 }
 
+/// Exclude pattern
+///
+/// The paths in source directory are matched with the pattern. If the path contains the pattern
+/// string, it is excluded from the comparison.
+pub enum ExcludePattern {
+    /// Compare string is anchored to the root of the source directory
+    ///
+    /// Matches only paths starting with contents of MatchPathStart.
+    ///
+    /// Note that the content string should be in form <source_dir + /path/to/sth>
+    MatchPathStart(String),
+    /// All paths containing the string are matched
+    MatchEverywhere(String),
+    // TODO: Add MatchPathFromSource or sth that anchors the contents to source_dir? This would
+    // work kinda similarly to MatchPathStart
+    // TODO: Add wildcards?
+}
+
 /// Helper function for serialisation of paths
 fn osstring_serialize<S>(hs: &Vec<OsString>, s: S) -> Result<S::Ok, S::Error>
 where
@@ -100,6 +123,8 @@ pub struct CopyConfirmer {
     hashes_rx: Receiver<HashResult>,
     threadpool: ThreadPool,
     show_progress: bool,
+    excluded_pattern: Vec<ExcludePattern>,
+    excluded_paths: Cell<Vec<OsString>>,
 }
 
 impl CopyConfirmer {
@@ -110,7 +135,14 @@ impl CopyConfirmer {
     pub fn new(num_threads: usize) -> Self {
         let (hashes_tx, hashes_rx) = channel();
         let threadpool = ThreadPool::new(num_threads);
-        Self { hashes_tx, hashes_rx, threadpool, show_progress: false }
+        Self {
+            hashes_tx,
+            hashes_rx,
+            threadpool,
+            show_progress: false,
+            excluded_pattern: vec![],
+            excluded_paths: Cell::new(vec![]),
+        }
     }
 
     /// Enable progress bar
@@ -120,7 +152,24 @@ impl CopyConfirmer {
             hashes_rx: self.hashes_rx,
             threadpool: self.threadpool,
             show_progress: true,
+            excluded_pattern: self.excluded_pattern,
+            excluded_paths: self.excluded_paths,
         }
+    }
+
+    /// Add exclude pattern
+    ///
+    /// The pattern is matched against the paths contained in source directory and the matching
+    /// paths get excluded from comparison entirely. (So that they are not reported when they are
+    /// missing.)
+    ///
+    /// The method can be used multiple times to exclude multiple patterns.
+    ///
+    /// Use method (get_excluded_paths)[CopyConfirmer::get_excluded_paths] to get all files excluded by CopyConfirmer.
+    pub fn add_excluded_pattern(self, exclude: ExcludePattern) -> Self {
+        let mut modifiable = self;
+        modifiable.excluded_pattern.push(exclude);
+        modifiable
     }
 
     /// Check if all files in source are also in one of destinations
@@ -138,6 +187,7 @@ impl CopyConfirmer {
     ) -> Result<ConfirmerResult, ConfirmerError> {
         // Total numbers of files for progress bars
         let source: &OsStr = source.as_ref();
+        let mut excluded_files: Vec<OsString> = vec![];
         let destinations: Vec<&OsStr> = destinations.iter().map(|x| x.as_ref()).collect();
         let total_files_source = get_total_files(source);
         let total_dest_files: u64 = destinations.iter().map(|x| get_total_files(x)).sum();
@@ -147,15 +197,23 @@ impl CopyConfirmer {
         // hash map for Ok result
         let mut found_files: HashMap<String, FileFound> = HashMap::new();
 
-        self._enqueue_all_hashes(source)?;
+        self._enqueue_all_hashes_src(source, &mut excluded_files)?;
 
-        self._track_progress(total_files_source, "Checking files from source");
+        // To reduce total files count in progress
+        let excluded_count = excluded_files.len();
+        // Add excluded files to self, so that it can be exported
+        let mut ex_paths = self.excluded_paths.take();
+        ex_paths.append(&mut excluded_files);
+        self.excluded_paths.set(ex_paths);
+
+        self._track_progress(
+            total_files_source - excluded_count as u64,
+            "Checking files from source",
+        );
 
         // Return Error on any panic
         if self.threadpool.panic_count() > 0 {
-            return Err(ConfirmerError(
-                "A panic occured while calculating hashes.".into(),
-            ));
+            return Err(ConfirmerError("A panic occured while calculating hashes.".into()));
         }
         // Add hashes for all files found in source dir to `missing files`
         for result in self.hashes_rx.try_iter() {
@@ -187,9 +245,7 @@ impl CopyConfirmer {
 
         // Return Error on any panic
         if self.threadpool.panic_count() > 0 {
-            return Err(ConfirmerError(
-                "A panic occured while calculating hashes.".into(),
-            ));
+            return Err(ConfirmerError("A panic occured while calculating hashes.".into()));
         }
 
         // Remove all files found in destinations from `missing_files`
@@ -220,6 +276,16 @@ impl CopyConfirmer {
         }
     }
 
+    /// Get paths of files that were excluded from comparison
+    ///
+    /// See [add_excluded_pattern](CopyConfirmer::add_excluded_pattern) and [ExcludePattern].
+    pub fn get_excluded_paths(&self) -> Vec<OsString> {
+        let ex_paths = self.excluded_paths.take();
+        let result = ex_paths.clone();
+        self.excluded_paths.set(ex_paths);
+        result
+    }
+
     /// Go recursively through directory. For each file add a job to calculate its checksum to the
     /// threadpool.
     ///
@@ -234,6 +300,42 @@ impl CopyConfirmer {
                 continue;
             }
             let path = item.into_path().into_os_string();
+            let sender = self.hashes_tx.clone();
+            self.threadpool.execute(move || {
+                sender
+                    .send((path.clone(), get_hash(path)))
+                    .expect("Could not send source file hash")
+            });
+        }
+        Ok(())
+    }
+
+    /// Go recursively through directory. For each file add a job to calculate its checksum to the
+    /// threadpool. Does not process the directories/files that match excluded patterns given.
+    ///
+    /// Returns std::io::Error if any path cannot be accessed
+    ///
+    /// # Arguments
+    /// * `dir` - directory to go through and get all hashes
+    fn _enqueue_all_hashes_src(
+        &self,
+        dir: &OsStr,
+        excluded_files: &mut Vec<OsString>,
+    ) -> IoResult<()> {
+        for item in WalkDir::new(dir) {
+            let item = item?;
+            if !item.file_type().is_file() {
+                continue;
+            }
+            let path = item.into_path().into_os_string();
+
+            // Filter out excluded patterns
+            if !self.excluded_pattern.is_empty() && is_path_excluded(&path, &self.excluded_pattern)
+            {
+                excluded_files.push(path);
+                continue;
+            }
+
             let sender = self.hashes_tx.clone();
             self.threadpool.execute(move || {
                 sender
@@ -289,4 +391,90 @@ fn get_total_files(dir: &OsStr) -> u64 {
 fn get_hash(path: OsString) -> IoResult<String> {
     let checksum = get_blake2_checksum(&path)?;
     Ok(checksum)
+}
+
+/// Returns true if path contains one of excluded patterns
+fn is_path_excluded(path: &OsStr, excluded_patterns: &Vec<ExcludePattern>) -> bool {
+    use ExcludePattern::*;
+    let path_str = path.to_str().expect("Could not decode path string.");
+    for pattern in excluded_patterns {
+        match pattern {
+            MatchEverywhere(part) => {
+                if path_str.contains(part) {
+                    return true;
+                }
+            }
+
+            MatchPathStart(part) => {
+                if path_str.starts_with(part) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_exclusion_match_path_start() -> Result<(), ConfirmerError> {
+        // Excludes foo subdir
+        let excluded_pattern_1 =
+            ExcludePattern::MatchPathStart(String::from("tests/fixtures/exclusion/dir_A/foo"));
+        // Will not exclude anything
+        let excluded_pattern_2 = ExcludePattern::MatchPathStart(String::from("/bar"));
+        let cc = CopyConfirmer::new(1)
+            .add_excluded_pattern(excluded_pattern_1)
+            .add_excluded_pattern(excluded_pattern_2);
+        let result = cc.compare(
+            String::from("tests/fixtures/exclusion/dir_A"),
+            &[String::from("tests/fixtures/exclusion/dir_B")],
+        )?;
+
+        let expected_missing = vec!["tests/fixtures/exclusion/dir_A/bar/foo.txt".into()];
+        assert_eq!(result, ConfirmerResult::MissingFiles(expected_missing));
+
+        let excluded = cc.get_excluded_paths();
+        let expected_excluded: Vec<OsString> = vec![
+            "tests/fixtures/exclusion/dir_A/foo/bar.txt".into(),
+            "tests/fixtures/exclusion/dir_A/foo/baz.txt".into(),
+            "tests/fixtures/exclusion/dir_A/foo/foo.txt".into(),
+        ];
+        assert_eq!(
+            HashSet::<OsString>::from_iter(excluded.into_iter()),
+            HashSet::from_iter(expected_excluded.into_iter())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_exclusion_match_everywhere() -> Result<(), ConfirmerError> {
+        // Excludes foo subdir
+        let excluded_pattern = ExcludePattern::MatchEverywhere(String::from("bar"));
+        // Will not exclude anything
+        let cc = CopyConfirmer::new(1).add_excluded_pattern(excluded_pattern);
+        let result = cc.compare(
+            String::from("tests/fixtures/exclusion/dir_A"),
+            &[String::from("tests/fixtures/exclusion/dir_B")],
+        )?;
+
+        let expected_missing = vec!["tests/fixtures/exclusion/dir_A/foo/foo.txt".into()];
+        assert_eq!(result, ConfirmerResult::MissingFiles(expected_missing));
+
+        let excluded = cc.get_excluded_paths();
+        let expected_excluded: Vec<OsString> = vec![
+            "tests/fixtures/exclusion/dir_A/foo/bar.txt".into(),
+            "tests/fixtures/exclusion/dir_A/bar/foo.txt".into(),
+        ];
+        assert_eq!(
+            HashSet::<OsString>::from_iter(excluded.into_iter()),
+            HashSet::from_iter(expected_excluded.into_iter())
+        );
+        Ok(())
+    }
 }

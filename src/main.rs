@@ -3,6 +3,7 @@ use std::cmp::max;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::prelude::*;
+use std::path::PathBuf;
 
 use clap::Parser;
 use colored::Colorize;
@@ -35,6 +36,13 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_progress_bar: bool,
 
+    /// Exclude pattern from being compared from src directory
+    #[arg(long)]
+    exclude: Vec<String>,
+
+    /// Print all files excluded from comparison to this file ("-" for stderr)
+    #[arg(long)]
+    print_excluded: Option<OsString>,
 }
 
 fn main() -> Result<(), ConfirmerError> {
@@ -44,10 +52,28 @@ fn main() -> Result<(), ConfirmerError> {
 
     let num_threads = max(1, args.jobs);
 
-    let cc = match args.no_progress_bar {
+    let mut cc = match args.no_progress_bar {
         true => CopyConfirmer::new(num_threads),
-        false => CopyConfirmer::new(num_threads).with_progress_bar()
+        false => CopyConfirmer::new(num_threads).with_progress_bar(),
     };
+
+    for mut path in args.exclude {
+        let pattern = if path.starts_with("/") {
+            let mut full_path = PathBuf::from(args.source.clone());
+            // Remove the leading slash - otherwise whole path gets replaced by `path`
+            path.remove(0);
+            full_path.push(path);
+            ExcludePattern::MatchPathStart(
+                full_path
+                    .into_os_string()
+                    .into_string()
+                    .expect("Badly formed source string or exclude string"),
+            )
+        } else {
+            ExcludePattern::MatchEverywhere(path)
+        };
+        cc = cc.add_excluded_pattern(pattern);
+    }
 
     match cc.compare(args.source, &args.destination)? {
         ConfirmerResult::Ok(filelist) => {
@@ -69,6 +95,21 @@ fn main() -> Result<(), ConfirmerError> {
                 println!("{file:?}");
             }
         }
+    }
+
+    let stderr_output_str = OsString::from("-");
+    match args.print_excluded {
+        Some(string) if string == stderr_output_str => {
+            println!("{}", "Excluded files:".red().bold());
+            println!("{:?}", cc.get_excluded_paths());
+        }
+        Some(out_file) => {
+            let mut file = File::create(out_file)?;
+            for f in cc.get_excluded_paths() {
+                write!(file, "{f:?}\n");
+            }
+        }
+        None => {}
     }
     Ok(())
 }
