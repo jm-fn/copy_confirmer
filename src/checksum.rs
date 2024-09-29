@@ -1,10 +1,10 @@
+use std::ffi::OsStr;
 /// Checksum calculation module
 ///
 /// Contains all functions for various checksum calculation.
 use std::fs::File;
-use std::io::{prelude::Read, BufReader};
-use std::ffi::OsStr;
 use std::io::Result as IoResult;
+use std::io::{prelude::Read, BufReader};
 
 use blake2::{Blake2b512, Digest};
 

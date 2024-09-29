@@ -51,7 +51,6 @@ use walkdir::WalkDir;
 
 use checksum::*;
 pub use copcon_error::ConfirmerError;
-use log;
 use serde::{ser::SerializeSeq, Serialize, Serializer};
 
 /// Indicates whether there are files missing in destination dirs
@@ -96,7 +95,7 @@ pub enum ExcludePattern {
 }
 
 /// Helper function for serialisation of paths
-fn osstring_serialize<S>(hs: &Vec<OsString>, s: S) -> Result<S::Ok, S::Error>
+fn osstring_serialize<S>(hs: &[OsString], s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
